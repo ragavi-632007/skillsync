@@ -11,8 +11,20 @@ import ProfilePage from './components/ProfilePage';
 import ChatInterface from './components/ChatInterface';
 import { AppState, MatchedUser, SessionSummary, UserProfile, User, Message, Post, Comment } from './types';
 import { generateMatch, generateSessionSummary } from './services/geminiService';
-import { mockUsers, mockMessages, mockPosts } from './data/mockData';
-import { getCurrentUser, signOut } from './services/supabaseService';
+import {
+  getCurrentUser,
+  signOut,
+  getUsers,
+  getPosts,
+  createPost,
+  togglePostLike,
+  createComment,
+  toggleFollow,
+  updateUser,
+  getMessages,
+  sendMessage,
+  createUserProfile
+} from './services/supabaseService';
 
 const App: React.FC = () => {
   const [appState, setAppState] = useState<AppState>(AppState.HOME);
@@ -20,27 +32,63 @@ const App: React.FC = () => {
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
-  
-  // Lifted data into state to allow for mutations
-  const [users, setUsers] = useState<User[]>(mockUsers);
-  const [posts, setPosts] = useState<Post[]>(mockPosts);
-  const [viewingProfileId, setViewingProfileId] = useState<number | null>(null);
+
+  // Data state
+  const [users, setUsers] = useState<User[]>([]);
+  const [posts, setPosts] = useState<Post[]>([]);
+  const [viewingProfileId, setViewingProfileId] = useState<string | null>(null);
 
   // Messaging state
   const [messages, setMessages] = useState<Message[]>([]);
-  const [activeChatUserId, setActiveChatUserId] = useState<number | null>(null);
+  const [activeChatUserId, setActiveChatUserId] = useState<string | null>(null);
 
-  // Check if user is already logged in
+  // Fetch initial data
+  const fetchData = useCallback(async () => {
+    try {
+      const [fetchedUsers, fetchedPosts] = await Promise.all([
+        getUsers(),
+        getPosts()
+      ]);
+
+      if (fetchedUsers) setUsers(fetchedUsers as User[]);
+      if (fetchedPosts) setPosts(fetchedPosts as unknown as Post[]);
+    } catch (err) {
+      console.error('Error fetching data:', err);
+    }
+  }, []);
+
+  // Check auth and load user
   useEffect(() => {
     const checkAuth = async () => {
       try {
         const user = await getCurrentUser();
         if (user && user.id) {
           setCurrentUserId(user.id);
-          // TODO: Load user from database table instead of mockUsers
-          // For now, using first user as placeholder
-          setCurrentUser(mockUsers[0]);
-          setAppState(AppState.DASHBOARD);
+
+          // Fetch all data first
+          await fetchData();
+
+          // Then get current user details from the fetched users list or fetch individually
+          // We'll rely on the users list for now, but in a real app we might want a specific call
+          // However, since we just called fetchData, let's try to find the user there
+          // If not found (e.g. race condition or pagination), we might need to fetch individually
+          // For simplicity, we'll assume fetchData gets all users for this demo size
+
+          // Re-fetch users to be sure we have the latest (including the current user if they just signed up)
+          const latestUsers = await getUsers();
+          if (latestUsers) {
+            setUsers(latestUsers as User[]);
+            const foundUser = latestUsers.find((u: any) => u.id === user.id);
+            if (foundUser) {
+              setCurrentUser(foundUser as User);
+              setAppState(AppState.DASHBOARD);
+            } else {
+              // User authenticated but not in users table? Should not happen if signup flow is correct
+              // But if it does, maybe redirect to a "Complete Profile" page?
+              // For now, let's just stay on Home or Login
+              console.warn('User authenticated but profile not found in database');
+            }
+          }
         }
       } catch (err) {
         console.error('Auth check failed:', err);
@@ -48,62 +96,70 @@ const App: React.FC = () => {
         setIsCheckingAuth(false);
       }
     };
-    
+
     checkAuth();
-  }, []);
+  }, [fetchData]);
 
-  // --- PERSISTENCE ---
+  // Refresh data periodically or on demand
   useEffect(() => {
-    try {
-      const storedMessages = localStorage.getItem('skillSyncMessages');
-      if (storedMessages) {
-        setMessages(JSON.parse(storedMessages));
-      } else {
-        setMessages(mockMessages);
-      }
-    } catch (e) {
-      console.error("Failed to load messages from localStorage", e);
-      setMessages(mockMessages);
+    if (currentUser) {
+      fetchData();
     }
-  }, []);
+  }, [currentUser, fetchData]);
 
+  // Fetch messages when chat is active
   useEffect(() => {
-    try {
-      localStorage.setItem('skillSyncMessages', JSON.stringify(messages));
-    } catch (e) {
-      console.error("Failed to save messages to localStorage", e);
+    if (currentUser && activeChatUserId) {
+      const fetchMessages = async () => {
+        const msgs = await getMessages(currentUser.id, activeChatUserId);
+        if (msgs) setMessages(msgs as unknown as Message[]);
+      };
+      fetchMessages();
+      // Set up a poller for messages for now (realtime would be better but this is simpler)
+      const interval = setInterval(fetchMessages, 3000);
+      return () => clearInterval(interval);
     }
-  }, [messages]);
+  }, [currentUser, activeChatUserId]);
 
   // State for the session flow
   const [userSessionProfile, setUserSessionProfile] = useState<UserProfile | null>(null);
   const [matchedUser, setMatchedUser] = useState<MatchedUser | null>(null);
   const [sessionSummary, setSessionSummary] = useState<SessionSummary | null>(null);
 
-  const handleLogin = (email: string, userId: string) => {
+  const handleLogin = async (email: string, userId: string) => {
     setCurrentUserId(userId);
-    // Find user by email in mock data (TODO: replace with DB query)
-    const user = users.find(u => u.email.toLowerCase() === email.toLowerCase());
-    if (user) {
-      setCurrentUser(user);
-      setAppState(AppState.DASHBOARD);
-      setError(null);
-    } else {
-      // Create a placeholder user if not found in mock data
-      setCurrentUser({
-        id: Math.random(),
-        name: email.split('@')[0],
-        email: email,
-        country: 'Not specified',
-        profilePicture: `https://i.pravatar.cc/150?u=${email}`,
-        skills: [],
-        bio: 'Welcome to SkillSync!',
-        aboutMe: 'Welcome to SkillSync!',
-        following: [],
-        followers: [],
-      });
-      setAppState(AppState.DASHBOARD);
-      setError(null);
+    await fetchData();
+    const latestUsers = await getUsers();
+    if (latestUsers) {
+      setUsers(latestUsers as User[]);
+      const user = latestUsers.find((u: any) => u.id === userId);
+      if (user) {
+        setCurrentUser(user as User);
+        setAppState(AppState.DASHBOARD);
+        setError(null);
+      } else {
+        // Fallback: Create profile if not found
+        console.warn('User profile not found, creating one...');
+        try {
+          await createUserProfile(email, email.split('@')[0], userId);
+          // Fetch again
+          const retryUsers = await getUsers();
+          if (retryUsers) {
+            setUsers(retryUsers as User[]);
+            const retryUser = retryUsers.find((u: any) => u.id === userId);
+            if (retryUser) {
+              setCurrentUser(retryUser as User);
+              setAppState(AppState.DASHBOARD);
+              setError(null);
+            } else {
+              setError('Failed to create user profile. Please try again.');
+            }
+          }
+        } catch (e) {
+          console.error('Error creating fallback profile:', e);
+          setError('Failed to initialize user profile.');
+        }
+      }
     }
   };
 
@@ -118,21 +174,28 @@ const App: React.FC = () => {
       console.error('Logout failed:', err);
     }
   };
-  
+
   const handleNavigate = (newState: AppState) => {
     setError(null);
     setAppState(newState);
   };
-  
-  const handleViewProfile = (userId: number) => {
+
+  const handleViewProfile = (userId: string) => {
     setViewingProfileId(userId);
     setAppState(AppState.PROFILE_VIEWING);
   };
-  
-  const handleFollowToggle = (targetUserId: number) => {
+
+  const handleFollowToggle = async (targetUserId: string) => {
     if (!currentUser) return;
 
-    setUsers(currentUsers => {
+    try {
+      const result = await toggleFollow(currentUser.id, targetUserId);
+
+      // Optimistic update or re-fetch
+      // For simplicity, let's re-fetch users to get updated follower/following counts/arrays
+      // But since our backend toggleFollow returns the action, we can manually update local state
+
+      setUsers(currentUsers => {
         const newUsers = [...currentUsers];
         const currentUserIndex = newUsers.findIndex(u => u.id === currentUser.id);
         const targetUserIndex = newUsers.findIndex(u => u.id === targetUserId);
@@ -142,105 +205,136 @@ const App: React.FC = () => {
         const updatedCurrentUser = { ...newUsers[currentUserIndex] };
         const updatedTargetUser = { ...newUsers[targetUserIndex] };
 
-        const isFollowing = updatedCurrentUser.following.includes(targetUserId);
-
-        if (isFollowing) {
-            updatedCurrentUser.following = updatedCurrentUser.following.filter(id => id !== targetUserId);
-            updatedTargetUser.followers = updatedTargetUser.followers.filter(id => id !== currentUser.id);
+        if (result.action === 'unfollowed') {
+          updatedCurrentUser.following = updatedCurrentUser.following.filter(id => id !== targetUserId);
+          updatedTargetUser.followers = updatedTargetUser.followers.filter(id => id !== currentUser.id);
         } else {
-            updatedCurrentUser.following = [...updatedCurrentUser.following, targetUserId];
-            updatedTargetUser.followers = [...updatedTargetUser.followers, currentUser.id];
+          updatedCurrentUser.following = [...updatedCurrentUser.following, targetUserId];
+          updatedTargetUser.followers = [...updatedTargetUser.followers, currentUser.id];
         }
 
         newUsers[currentUserIndex] = updatedCurrentUser;
         newUsers[targetUserIndex] = updatedTargetUser;
-        
+
         setCurrentUser(updatedCurrentUser);
+        return newUsers;
+      });
+    } catch (e) {
+      console.error('Error toggling follow:', e);
+    }
+  };
+
+  const handleUpdateProfile = async (userId: string, newAboutMe: string) => {
+    try {
+      await updateUser(userId, { about_me: newAboutMe });
+
+      setUsers(currentUsers => {
+        const newUsers = currentUsers.map(user =>
+          user.id === userId ? { ...user, aboutMe: newAboutMe } : user
+        );
+
+        if (currentUser && currentUser.id === userId) {
+          setCurrentUser(newUsers.find(u => u.id === userId) || null);
+        }
 
         return newUsers;
-    });
+      });
+    } catch (e) {
+      console.error('Error updating profile:', e);
+    }
   };
 
-  const handleUpdateProfile = (userId: number, newAboutMe: string) => {
-    setUsers(currentUsers => {
-      const newUsers = currentUsers.map(user => 
-        user.id === userId ? { ...user, aboutMe: newAboutMe } : user
-      );
-      
-      if (currentUser && currentUser.id === userId) {
-        setCurrentUser(newUsers.find(u => u.id === userId) || null);
-      }
-      
-      return newUsers;
-    });
-  };
-
-  const handleOpenChat = (userId: number) => {
+  const handleOpenChat = (userId: string) => {
     setActiveChatUserId(userId);
   };
 
-  const handleSendMessage = (content: string) => {
+  const handleSendMessage = async (content: string) => {
     if (!currentUser || !activeChatUserId) return;
-    const newMessage: Message = {
-      id: Date.now(),
-      senderId: currentUser.id,
-      receiverId: activeChatUserId,
-      content,
-      timestamp: new Date().toISOString(),
-    };
-    setMessages(prevMessages => [...prevMessages, newMessage]);
+
+    try {
+      const sentMsg = await sendMessage(currentUser.id, activeChatUserId, content);
+      if (sentMsg) {
+        setMessages(prevMessages => [...prevMessages, sentMsg as unknown as Message]);
+      }
+    } catch (e) {
+      console.error('Error sending message:', e);
+    }
   };
-  
-  const handleCreatePost = (postData: Omit<Post, 'id' | 'authorId' | 'timestamp' | 'likes' | 'comments'>) => {
+
+  const handleCreatePost = async (postData: Omit<Post, 'id' | 'authorId' | 'timestamp' | 'likes' | 'comments'>) => {
     if (!currentUser) return;
 
-    const newPost: Post = {
-      ...postData,
-      id: Date.now(),
-      authorId: currentUser.id,
-      timestamp: 'Just now',
-      likes: [],
-      comments: [],
-    };
-    setPosts(prevPosts => [newPost, ...prevPosts]);
-  };
-
-  const handleLikeToggle = (postId: number) => {
-    if (!currentUser) return;
-    
-    setPosts(prevPosts => {
-      return prevPosts.map(post => {
-        if (post.id === postId) {
-          const isLiked = post.likes.includes(currentUser.id);
-          if (isLiked) {
-            return { ...post, likes: post.likes.filter(id => id !== currentUser.id) };
-          } else {
-            return { ...post, likes: [...post.likes, currentUser.id] };
-          }
-        }
-        return post;
-      });
-    });
-  };
-  
-  const handleAddComment = (postId: number, content: string) => {
-      if (!currentUser) return;
-
-      const newComment: Comment = {
-          id: Date.now(),
+    try {
+      const newPost = await createPost(currentUser.id, postData.title || '', postData.content);
+      if (newPost) {
+        // Re-fetch posts to get the full object with correct timestamp etc
+        // Or just prepend locally
+        const completePost: Post = {
+          ...newPost,
           authorId: currentUser.id,
-          content,
-          timestamp: 'Just now',
-      };
-      
+          likes: [],
+          comments: [],
+          type: 'TEXT' // Default for now as createPost is simple
+        } as unknown as Post;
+
+        setPosts(prevPosts => [completePost, ...prevPosts]);
+        fetchData(); // Refresh to be sure
+      }
+    } catch (e) {
+      console.error('Error creating post:', e);
+    }
+  };
+
+  const handleLikeToggle = async (postId: number) => {
+    if (!currentUser) return;
+
+    try {
+      const result = await togglePostLike(postId.toString(), currentUser.id);
+
       setPosts(prevPosts => {
-          return prevPosts.map(post => {
-              if (post.id === postId) {
-                  return { ...post, comments: [...post.comments, newComment] };
+        return prevPosts.map(post => {
+          if (post.id === postId) {
+            const isLiked = post.likes.includes(currentUser.id);
+            // If action was 'unliked', remove user. If 'liked', add user.
+            // However, the result returns the new count, not the array.
+            // We need to manually update the array for UI state.
+
+            let newLikes = [...post.likes];
+            if (result.action === 'unliked') {
+              newLikes = newLikes.filter(id => id !== currentUser.id);
+            } else {
+              if (!newLikes.includes(currentUser.id)) {
+                newLikes.push(currentUser.id);
               }
-              return post;
-          });
+            }
+            return { ...post, likes: newLikes };
+          }
+          return post;
+        });
       });
+    } catch (e) {
+      console.error('Error toggling like:', e);
+    }
+  };
+
+  const handleAddComment = async (postId: number, content: string) => {
+    if (!currentUser) return;
+
+    try {
+      const newComment = await createComment(postId.toString(), currentUser.id, content);
+      if (newComment) {
+        setPosts(prevPosts => {
+          return prevPosts.map(post => {
+            if (post.id === postId) {
+              return { ...post, comments: [...post.comments, newComment as unknown as Comment] };
+            }
+            return post;
+          });
+        });
+      }
+    } catch (e) {
+      console.error('Error adding comment:', e);
+    }
   };
 
   const handleStartMatching = useCallback(async (profile: UserProfile) => {
@@ -258,10 +352,10 @@ const App: React.FC = () => {
       console.error(e);
     }
   }, []);
-  
+
   const handleMatchAccepted = () => {
     if (matchedUser) {
-        setAppState(AppState.SESSION_ACTIVE);
+      setAppState(AppState.SESSION_ACTIVE);
     }
   };
 
@@ -275,11 +369,11 @@ const App: React.FC = () => {
       setAppState(AppState.SESSION_SUMMARY);
     } catch (e) {
       setError('Failed to generate session summary.');
-      setAppState(AppState.SESSION_ACTIVE); 
+      setAppState(AppState.SESSION_ACTIVE);
       console.error(e);
     }
   }, [userSessionProfile, matchedUser]);
-  
+
   const handleRestartSessionFlow = () => {
     setAppState(AppState.DASHBOARD);
     setUserSessionProfile(null);
@@ -289,7 +383,7 @@ const App: React.FC = () => {
   };
 
   const renderSessionFlow = () => {
-     switch (appState) {
+    switch (appState) {
       case AppState.SESSION_ONBOARDING:
         return <Onboarding onStartMatching={handleStartMatching} onBack={() => setAppState(AppState.DASHBOARD)} error={error} />;
       case AppState.SESSION_MATCHING:
@@ -298,7 +392,7 @@ const App: React.FC = () => {
         if (userSessionProfile && matchedUser) {
           return <Session user={userSessionProfile} partner={matchedUser} onEndSession={handleEndSession} />;
         }
-        handleRestartSessionFlow(); 
+        handleRestartSessionFlow();
         return null;
       case AppState.SESSION_SUMMARY_LOADING:
         return <Matching isSummary={true} />;
@@ -310,10 +404,14 @@ const App: React.FC = () => {
         return null;
       default:
         return null;
-     }
+    }
   };
 
   const renderContent = () => {
+    if (isCheckingAuth) {
+      return <div className="min-h-screen flex items-center justify-center bg-gray-900 text-white">Loading...</div>;
+    }
+
     if (!currentUser) {
       switch (appState) {
         case AppState.LOGIN:
@@ -328,9 +426,9 @@ const App: React.FC = () => {
     const viewingProfile = viewingProfileId ? users.find(u => u.id === viewingProfileId) : null;
     const activeChatPartner = activeChatUserId ? users.find(u => u.id === activeChatUserId) : null;
     const messagesForActiveChat = messages.filter(
-        (msg) =>
-            (msg.senderId === currentUser.id && msg.receiverId === activeChatUserId) ||
-            (msg.senderId === activeChatUserId && msg.receiverId === currentUser.id)
+      (msg) =>
+        (msg.senderId === currentUser.id && msg.receiverId === activeChatUserId) ||
+        (msg.senderId === activeChatUserId && msg.receiverId === currentUser.id)
     );
 
     return (
@@ -338,42 +436,42 @@ const App: React.FC = () => {
         <Navbar currentUser={currentUser} onLogout={handleLogout} onViewProfile={handleViewProfile} />
         <main className="w-full max-w-7xl mx-auto pt-20 px-4">
           {appState === AppState.DASHBOARD && (
-              <Dashboard 
-                currentUser={currentUser} 
-                users={users} 
-                posts={posts}
-                onStartSession={() => handleNavigate(AppState.SESSION_ONBOARDING)} 
-                onViewProfile={handleViewProfile}
-                onCreatePost={handleCreatePost}
-                onLikeToggle={handleLikeToggle}
-                onAddComment={handleAddComment}
-              />
+            <Dashboard
+              currentUser={currentUser}
+              users={users}
+              posts={posts}
+              onStartSession={() => handleNavigate(AppState.SESSION_ONBOARDING)}
+              onViewProfile={handleViewProfile}
+              onCreatePost={handleCreatePost}
+              onLikeToggle={handleLikeToggle}
+              onAddComment={handleAddComment}
+            />
           )}
           {appState === AppState.PROFILE_VIEWING && viewingProfile && (
-              <ProfilePage
-                  currentUser={currentUser}
-                  profileUser={viewingProfile}
-                  users={users}
-                  posts={posts}
-                  onFollowToggle={handleFollowToggle}
-                  onUpdateProfile={handleUpdateProfile}
-                  onOpenChat={handleOpenChat}
-                  onBack={() => setAppState(AppState.DASHBOARD)}
-                  onViewProfile={handleViewProfile}
-                  onLikeToggle={handleLikeToggle}
-                  onAddComment={handleAddComment}
-              />
+            <ProfilePage
+              currentUser={currentUser}
+              profileUser={viewingProfile}
+              users={users}
+              posts={posts}
+              onFollowToggle={handleFollowToggle}
+              onUpdateProfile={handleUpdateProfile}
+              onOpenChat={handleOpenChat}
+              onBack={() => setAppState(AppState.DASHBOARD)}
+              onViewProfile={handleViewProfile}
+              onLikeToggle={handleLikeToggle}
+              onAddComment={handleAddComment}
+            />
           )}
           {isSessionFlowActive && <div className="py-8">{renderSessionFlow()}</div>}
         </main>
         {activeChatPartner && (
-            <ChatInterface
-                currentUser={currentUser}
-                chatPartner={activeChatPartner}
-                messages={messagesForActiveChat}
-                onSendMessage={handleSendMessage}
-                onClose={() => setActiveChatUserId(null)}
-            />
+          <ChatInterface
+            currentUser={currentUser}
+            chatPartner={activeChatPartner}
+            messages={messagesForActiveChat}
+            onSendMessage={handleSendMessage}
+            onClose={() => setActiveChatUserId(null)}
+          />
         )}
       </div>
     );

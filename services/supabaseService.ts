@@ -1,8 +1,8 @@
 import { createClient } from '@supabase/supabase-js';
 
 // Initialize Supabase client
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+const supabaseUrl = (import.meta as any).env.VITE_SUPABASE_URL || '';
+const supabaseAnonKey = (import.meta as any).env.VITE_SUPABASE_ANON_KEY || '';
 
 if (!supabaseUrl || !supabaseAnonKey) {
   console.warn('Supabase environment variables are not set. Please add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to your .env file.');
@@ -15,8 +15,7 @@ export const signUp = async (email: string, password: string) => {
   try {
     const { data, error } = await supabase.auth.signUp({ email, password });
     if (error) throw error;
-    // data may contain { user, session } or only user depending on project settings
-    return { success: true, user: (data as any)?.user ?? (data as any) };
+    return { success: true, user: data.user, session: data.session };
   } catch (error) {
     console.error('Sign up error:', error);
     throw error;
@@ -27,7 +26,7 @@ export const signIn = async (email: string, password: string) => {
   try {
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) throw error;
-    return { success: true, user: (data as any)?.user ?? (data as any) };
+    return { success: true, user: data.user, session: data.session };
   } catch (error) {
     console.error('Sign in error:', error);
     throw error;
@@ -76,7 +75,7 @@ export const getUserById = async (id: string) => {
       .from('users')
       .select('*')
       .eq('id', id)
-      .single();
+      .maybeSingle();
     if (error) throw error;
     return data;
   } catch (error) {
@@ -105,10 +104,33 @@ export const getPosts = async () => {
   try {
     const { data, error } = await supabase
       .from('posts')
-      .select('*')
-      .order('timestamp', { ascending: false });
+      .select(`
+        *,
+        post_likes (user_id),
+        comments (
+          id,
+          author_id,
+          content,
+          created_at
+        )
+      `)
+      .order('created_at', { ascending: false });
+
     if (error) throw error;
-    return data;
+
+    // Transform data to match Post interface
+    return data.map((post: any) => ({
+      ...post,
+      authorId: post.author_id,
+      timestamp: post.created_at || post.timestamp, // Handle both just in case
+      likes: post.post_likes ? post.post_likes.map((l: any) => l.user_id) : [],
+      comments: post.comments ? post.comments.map((c: any) => ({
+        id: c.id,
+        authorId: c.author_id,
+        content: c.content,
+        timestamp: c.created_at
+      })) : []
+    }));
   } catch (error) {
     console.error('Get posts error:', error);
     throw error;
@@ -265,11 +287,31 @@ export const toggleFollow = async (followerId: string, targetId: string) => {
   }
 };
 
-export const createUserProfile = async (email: string, name: string) => {
-  const user = await getCurrentUser();
-  if (user) {
-    await supabase.from('users').insert([
-      { id: user.id, email, name }
+export const createUserProfile = async (email: string, name: string, userId?: string) => {
+  let uid = userId;
+  if (!uid) {
+    const user = await getCurrentUser();
+    uid = user?.id;
+  }
+
+  if (uid) {
+    const { error } = await supabase.from('users').insert([
+      {
+        id: uid,
+        email,
+        name,
+        skills: [],
+        following: [],
+        followers: []
+      }
     ]);
+
+    if (error) {
+      console.error('Error creating user profile:', error);
+      throw error;
+    }
+  } else {
+    console.error('Cannot create profile: No user ID found');
+    throw new Error('No user ID found for profile creation');
   }
 };

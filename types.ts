@@ -15,7 +15,7 @@ export enum AppState {
 
 // --- NEW DATA MODELS ---
 export interface User {
-  id: number;
+  id: string;
   name: string;
   email: string; // for login
   country: string;
@@ -23,35 +23,35 @@ export interface User {
   skills: string[];
   bio: string;
   aboutMe: string; // New detailed biography field
-  following: number[]; // array of user IDs
-  followers: number[]; // array of user IDs
+  following: string[]; // array of user IDs
+  followers: string[]; // array of user IDs
 }
 
 export type PostType = 'TEXT' | 'PHOTO' | 'VIDEO' | 'ARTICLE';
 
 export interface Comment {
-    id: number;
-    authorId: number;
-    content: string;
-    timestamp: string;
+  id: number;
+  authorId: string;
+  content: string;
+  timestamp: string;
 }
 
 export interface Post {
-    id: number;
-    authorId: number;
-    type: PostType;
-    content: string; // Caption or main text
-    mediaUrl?: string; // For Photo or Video
-    title?: string; // For Article
-    likes: number[]; // Array of user IDs who liked
-    comments: Comment[];
-    timestamp: string;
+  id: number;
+  authorId: string;
+  type: PostType;
+  content: string; // Caption or main text
+  mediaUrl?: string; // For Photo or Video
+  title?: string; // For Article
+  likes: string[]; // Array of user IDs who liked
+  comments: Comment[];
+  timestamp: string;
 }
 
 export interface Message {
   id: number;
-  senderId: number;
-  receiverId: number;
+  senderId: string;
+  receiverId: string;
   content: string;
   timestamp: string;
 }
@@ -59,7 +59,7 @@ export interface Message {
 // --- ORIGINAL SESSION MODELS ---
 export interface UserProfile {
   skillToOffer: string;
-  skillToLearn:string;
+  skillToLearn: string;
 }
 
 export interface MatchedUser {
@@ -96,57 +96,57 @@ export interface AiCoachResponse {
 
 // Gemini Type Schemas
 export const MatchedUserSchema = {
-    type: Type.OBJECT,
-    properties: {
-        name: { type: Type.STRING },
-        country: { type: Type.STRING },
-        skillToOffer: { type: Type.STRING },
-        skillToLearn: { type: Type.STRING },
-        personality: { type: Type.STRING },
-        learningStyle: { type: Type.STRING },
-        profilePicture: { type: Type.STRING, description: "A placeholder image URL from i.pravatar.cc" },
-    },
-    required: ['name', 'country', 'skillToOffer', 'skillToLearn', 'personality', 'learningStyle', 'profilePicture']
+  type: Type.OBJECT,
+  properties: {
+    name: { type: Type.STRING },
+    country: { type: Type.STRING },
+    skillToOffer: { type: Type.STRING },
+    skillToLearn: { type: Type.STRING },
+    personality: { type: Type.STRING },
+    learningStyle: { type: Type.STRING },
+    profilePicture: { type: Type.STRING, description: "A placeholder image URL from i.pravatar.cc" },
+  },
+  required: ['name', 'country', 'skillToOffer', 'skillToLearn', 'personality', 'learningStyle', 'profilePicture']
 };
 
 export const SessionSummarySchema = {
-    type: Type.OBJECT,
-    properties: {
-        score: { type: Type.NUMBER },
-        summary: { type: Type.STRING },
-        takeaway: { type: Type.STRING },
-    },
-    required: ['score', 'summary', 'takeaway']
+  type: Type.OBJECT,
+  properties: {
+    score: { type: Type.NUMBER },
+    summary: { type: Type.STRING },
+    takeaway: { type: Type.STRING },
+  },
+  required: ['score', 'summary', 'takeaway']
 };
 
 export const AiCoachResponseSchema = {
-    type: Type.OBJECT,
-    properties: {
-        microLesson: {
-            type: Type.OBJECT,
-            properties: {
-                title: { type: Type.STRING },
-                content: { type: Type.STRING },
-                for: { type: Type.STRING, enum: ['user', 'partner'] }
-            },
-            required: ['title', 'content', 'for']
-        },
-        activity: {
-            type: Type.OBJECT,
-            properties: {
-                title: { type: Type.STRING },
-                description: { type: Type.STRING }
-            },
-            required: ['title', 'description']
-        },
-        cultureBridge: {
-            type: Type.OBJECT,
-            properties: {
-                title: { type: Type.STRING },
-                content: { type: Type.STRING }
-            },
-            required: ['title', 'content']
-        }
+  type: Type.OBJECT,
+  properties: {
+    microLesson: {
+      type: Type.OBJECT,
+      properties: {
+        title: { type: Type.STRING },
+        content: { type: Type.STRING },
+        for: { type: Type.STRING, enum: ['user', 'partner'] }
+      },
+      required: ['title', 'content', 'for']
     },
-    required: ['microLesson', 'activity', 'cultureBridge']
+    activity: {
+      type: Type.OBJECT,
+      properties: {
+        title: { type: Type.STRING },
+        description: { type: Type.STRING }
+      },
+      required: ['title', 'description']
+    },
+    cultureBridge: {
+      type: Type.OBJECT,
+      properties: {
+        title: { type: Type.STRING },
+        content: { type: Type.STRING }
+      },
+      required: ['title', 'content']
+    }
+  },
+  required: ['microLesson', 'activity', 'cultureBridge']
 };
